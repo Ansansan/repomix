@@ -34,7 +34,7 @@ export class PythonParseStrategy extends BaseParseStrategy {
 
     // Function definition
     if (captureTypes.has(CaptureType.Function)) {
-      return this.parseFunctionDefinition(lines, startRow, processedChunks).content;
+      return this.parseFunctionDefinition(lines, node, startRow, processedChunks).content;
     }
 
     // Docstring
@@ -78,11 +78,21 @@ export class PythonParseStrategy extends BaseParseStrategy {
     return match ? line.replace(/:\s*$/, '') : line.replace(/:\s*$/, '');
   }
 
-  private getFunctionSignature(lines: string[], startRow: number): string | null {
-    const line = lines[startRow];
-    const match = line.match(/def\s+(\w+)\s*\((.*?)\)(\s*->\s*[^:]+)?:/);
-    if (!match) return null;
-    return line.replace(/:\s*$/, '');
+  // A signature runs from the `def` line through the `:` before the body, which can be
+  // several lines down once a formatter wraps the parameters. Taking its extent from the
+  // syntax tree, rather than matching the `def` line, also keeps non-ASCII names, which
+  // a `\w` pattern doesn't match.
+  private getFunctionSignature(lines: string[], node: Node): string | null {
+    // The capture is either the definition itself or its name.
+    const definition = node.type === 'function_definition' ? node : node.parent;
+    if (definition?.type !== 'function_definition') return null;
+
+    const startRow = definition.startPosition.row;
+    const colon = definition.children.find((child) => child.type === ':');
+    const endRow = colon ? colon.endPosition.row : startRow;
+    const signatureLines = lines.slice(startRow, endRow + 1);
+    if (signatureLines.length === 0) return null;
+    return signatureLines.join('\n').replace(/:\s*$/, '');
   }
 
   private parseClassDefinition(lines: string[], startRow: number, processedChunks: Set<string>): ParseResult {
@@ -97,9 +107,14 @@ export class PythonParseStrategy extends BaseParseStrategy {
     return this.createResult(fullDefinition);
   }
 
-  private parseFunctionDefinition(lines: string[], startRow: number, processedChunks: Set<string>): ParseResult {
+  private parseFunctionDefinition(
+    lines: string[],
+    node: Node,
+    startRow: number,
+    processedChunks: Set<string>,
+  ): ParseResult {
     const decorators = this.getDecorators(lines, startRow);
-    const signature = this.getFunctionSignature(lines, startRow);
+    const signature = this.getFunctionSignature(lines, node);
 
     if (!signature) {
       return this.createNullResult();
